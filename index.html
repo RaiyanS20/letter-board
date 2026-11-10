@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Letter Board">
+<title>Letter Board</title>
+<style>
+  :root{--bg:#000;--fg:#fff;--key:#111;--line:#fff;--hi:#ffd400;--gap:8px}
+  body.light{--bg:#fff;--fg:#000;--key:#fff;--line:#000;--hi:#0057d9}
+  body.yellow{--bg:#000;--fg:#ffe600;--key:#000;--line:#ffe600;--hi:#fff}
+
+  *{box-sizing:border-box;touch-action:none;-webkit-tap-highlight-color:transparent;
+    -webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+  html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+  html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
+
+  /* Three fixed bands: controls, text, board. The board never moves or resizes while she types. */
+  body{position:fixed;top:0;left:0;right:0;bottom:0;display:grid;gap:var(--gap);
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:auto minmax(0,2fr) minmax(0,7fr);
+    background:var(--bg);color:var(--fg);
+    font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
+    padding:calc(var(--gap) + env(safe-area-inset-top)) calc(var(--gap) + env(safe-area-inset-right))
+            calc(var(--gap) + env(safe-area-inset-bottom)) calc(var(--gap) + env(safe-area-inset-left))}
+
+  button{font:inherit;color:var(--fg);background:var(--key);border:3px solid var(--line);
+    border-radius:12px;font-weight:900;line-height:1;position:relative;overflow:hidden;margin:0;padding:0}
+  button.fired{background:var(--fg);color:var(--bg)}
+  button.waiting{border-color:var(--hi)}
+  button.holding::after{content:"";position:absolute;left:0;top:0;height:16%;max-height:12px;min-height:5px;
+    background:var(--hi);animation:fill var(--hold,400ms) linear forwards}
+  @keyframes fill{from{width:0}to{width:100%}}
+  .hidden{display:none !important}
+
+  /* Top strip: adult controls, kept far from the resting hand */
+  #bar{display:flex;gap:var(--gap);min-width:0}
+  #bar button{height:48px;padding:0 14px;font-size:16px;border-width:2px;white-space:nowrap;flex:0 0 auto}
+  #bar .gap{flex:1 1 0;min-width:0}
+  #btnMode{width:68px;padding:0 !important}
+  #btnSpeak:active{background:var(--fg);color:var(--bg)}
+  .short{display:none}
+
+  /* What she has typed. The text shrinks to stay in view, the box itself never changes size. */
+  #out{min-height:0;overflow:hidden;background:var(--bg);border:4px solid var(--line);border-radius:12px;
+    padding:6px 14px;font-size:48px;font-weight:900;line-height:1.15;letter-spacing:.04em;
+    white-space:pre-wrap;overflow-wrap:anywhere}
+  #caret{display:inline-block;width:.5em;height:.12em;background:var(--hi)}
+
+  /* The stencil: always six across and five rows deep */
+  #grid{min-height:0;min-width:0;display:grid;gap:var(--gap);container-type:size;
+    grid-template-columns:repeat(6,minmax(0,1fr));grid-template-rows:repeat(5,minmax(0,1fr))}
+  #grid button{font-size:clamp(16px,min(11vw,8vh),120px);font-size:clamp(16px,min(10cqw,11.5cqh),130px)}
+  #grid button.tall{grid-row:span 2;font-size:clamp(18px,min(13vw,10vh),150px);font-size:clamp(18px,min(12cqw,15cqh),170px)}
+  #grid button.wide{grid-row:5;font-size:clamp(12px,min(4.6vw,4vh),44px);font-size:clamp(12px,min(4.5cqw,6cqh),46px)}
+  #keySpace{grid-column:3 / span 2}
+  #keyBack{grid-column:5 / span 2}
+
+  /* Narrow screens (phones held upright) */
+  @media (max-width:520px){
+    :root{--gap:6px}
+    #bar button{padding:0 7px;font-size:13px}
+    #btnMode{width:46px}
+    .long{display:none}.short{display:inline}
+    #out{padding:4px 10px;border-width:3px}
+    button{border-width:2px;border-radius:9px}
+  }
+  @media (max-width:350px){
+    :root{--gap:4px}
+    #bar button{padding:0 4px;font-size:12px}
+    #btnMode{width:38px}
+  }
+  /* Short screens (phones held sideways) */
+  @media (max-height:500px){
+    :root{--gap:5px}
+    #bar button{height:34px;font-size:13px}
+    #out{padding:2px 10px;border-width:2px}
+    button{border-width:2px;border-radius:8px}
+  }
+
+  /* Settings sheet for the adult */
+  #sheet,#sheet *{touch-action:pan-y}
+  #sheet{position:fixed;top:0;left:0;right:0;bottom:0;z-index:10;overflow-y:auto;
+    background:var(--bg);color:var(--fg);
+    padding:0 calc(20px + env(safe-area-inset-right))
+            calc(24px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left))}
+  #sheetInner{max-width:640px;margin:0 auto}
+  /* Title and DONE stay in view however far the sheet is scrolled */
+  #sheetHead{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;
+    background:var(--bg);border-bottom:2px solid var(--line);margin-bottom:12px;
+    padding:calc(12px + env(safe-area-inset-top)) 0 12px}
+  #sheet h1{margin:0;font-size:28px;outline:none}
+  #sheet p{margin:0 0 10px;font-size:16px;line-height:1.4;font-weight:400}
+  #sheet h2{margin:22px 0 4px;font-size:19px}
+  #sheet .help{opacity:.8;font-size:15px}
+  #sheet .note{border:2px solid var(--hi);border-radius:10px;padding:10px 12px;margin-top:12px}
+  .opts{display:flex;flex-wrap:wrap;gap:8px}
+  .opts button,#done{min-height:52px;padding:0 18px;font-size:18px;border-width:2px}
+  .opts button:active,#done:active{background:var(--fg);color:var(--bg)}
+  .opts button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
+  #done{flex:0 0 auto;min-width:120px;font-size:20px}
+  #ver{margin-top:26px;text-align:center;opacity:.6;font-size:13px}
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <button id="btnSettings" type="button" aria-label="Settings. Hold for one second."><span class="long">HOLD FOR SETUP</span><span class="short">SETUP</span></button>
+  <button id="btnUndo" type="button" class="hidden" aria-label="Undo clear. Hold for one second."><span class="long">HOLD TO UNDO</span><span class="short">UNDO</span></button>
+  <span class="gap"></span>
+  <button id="btnSpeak" type="button" class="hidden" aria-label="Speak the text aloud">SPEAK</button>
+  <button id="btnMode" type="button" aria-label="Switch to numbers">123</button>
+  <button id="btnClear" type="button" aria-label="Clear all text. Hold for one second."><span class="long">HOLD TO CLEAR</span><span class="short">HOLD CLEAR</span></button>
+</div>
+
+<div id="out" role="status" aria-live="polite" aria-label="Typed text"><span id="txt"></span><span id="caret" aria-hidden="true"></span></div>
+
+<div id="grid"></div>
+
+<div id="sheet" class="hidden" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div id="sheetInner">
+    <div id="sheetHead">
+      <h1 id="sheetTitle" tabindex="-1">Setup</h1>
+      <button id="done" type="button">DONE</button>
+    </div>
+    <p class="help">For the adult setting up the board. Changes apply straight away.</p>
+    <div id="notes"></div>
+    <div id="optList"></div>
+    <div id="ver">Letter Board 2.3</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  /* Very old iPads cannot run the touch handling. Say so plainly and do not show a dead board. */
+  if(!window.PointerEvent || !document.elementFromPoint){
+    document.getElementById('txt').textContent = 'This board needs iPadOS 13.4 or newer.';
+    document.getElementById('bar').style.visibility = 'hidden';
+    return;
+  }
+
+  /* ---------- storage (may be unavailable, the board still works without it) ---------- */
+  var storageOK = (function(){
+    try{ localStorage.setItem('lb.test','1'); var ok = localStorage.getItem('lb.test') === '1';
+         localStorage.removeItem('lb.test'); return ok; }
+    catch(e){ return false; }
+  })();
+  function load(name, fallback){
+    try{ var v = localStorage.getItem(name); return v === null ? fallback : JSON.parse(v); }
+    catch(e){ return fallback; }
+  }
+  function save(name, value){
+    try{ localStorage.setItem(name, JSON.stringify(value)); }catch(e){}
+  }
+
+  /* ---------- settings ---------- */
+  var DEFAULTS = {hold:0, repeat:300, theme:'dark', sound:false, speak:false};
+  var OPTIONS = [
+    {key:'hold', label:'How long a key must be held before it counts',
+      help:'Instant suits a quick, clean touch. Choose a hold time if a resting hand or stray touches type letters. With a hold time she can also slide her finger to a letter and rest on it.',
+      opts:[[0,'Instant'],[200,'0.2 s'],[400,'0.4 s'],[700,'0.7 s'],[1000,'1 s']]},
+    {key:'repeat', label:'Pause after each key',
+      help:'Stops one shaky touch from typing twice. A touch on another key during the pause counts if the finger is still down when the pause ends. In Instant mode, touching the same key again during the pause is ignored.',
+      opts:[[0,'Off'],[300,'0.3 s'],[600,'0.6 s'],[1000,'1 s']]},
+    {key:'theme', label:'Colours',
+      opts:[['dark','White on black'],['light','Black on white'],['yellow','Yellow on black']]},
+    {key:'sound', label:'Click sound when a key counts', opts:[[false,'Off'],[true,'On']]},
+    {key:'speak', label:'SPEAK button',
+      help:'Adds a button in the top strip that reads the text aloud.',
+      opts:[[false,'Hide'],[true,'Show']]}
+  ];
+  var cfg = Object.assign({}, DEFAULTS);
+  (function(){
+    var saved = load('lb.cfg', {});
+    if(saved && typeof saved === 'object'){
+      OPTIONS.forEach(function(o){
+        var valid = o.opts.some(function(p){ return p[0] === saved[o.key]; });
+        if(valid) cfg[o.key] = saved[o.key];
+      });
+    }
+  })();
+
+  /* ---------- state ---------- */
+  var text = load('lb.text', '');       if(typeof text !== 'string') text = '';
+  var undoText = load('lb.undo', null); if(typeof undoText !== 'string') undoText = null;
+  var mode = 'letters';
+  var sheetOpen = false;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var txt = $('txt'), out = $('out'), grid = $('grid'), sheet = $('sheet');
+
+  /* Shrink the text so the whole message stays visible. If it still does not fit at the smallest
+     size, show the newest part after "..." so that no line is ever cut in half. */
+  function over(){ return out.scrollHeight > out.clientHeight + 1; }
+  function fit(){
+    txt.textContent = text;
+    var cs = getComputedStyle(out);
+    var inner = out.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    var max = Math.max(18, Math.min(72, Math.floor(inner / 2.4)));
+    var min = Math.min(max, 26);
+    var size = max;
+    out.style.fontSize = size + 'px';
+    while(size > min && over()){
+      size = Math.max(min, size - 2); out.style.fontSize = size + 'px';
+    }
+    if(over()){
+      var lo = 0, hi = text.length;
+      while(lo < hi){
+        var mid = (lo + hi) >> 1;
+        txt.textContent = '\u2026 ' + text.slice(mid);
+        if(over()) lo = mid + 1; else hi = mid;
+      }
+      var sp = text.indexOf(' ', lo);                 /* start at a whole word where one is close */
+      if(sp !== -1 && sp - lo < 20 && sp < text.length - 1) lo = sp + 1;
+      txt.textContent = '\u2026 ' + text.slice(lo);
+    }
+    out.scrollTop = 0;
+  }
+  function show(){
+    fit();
+    save('lb.text', text);
+    save('lb.undo', undoText);
+    $('btnUndo').classList.toggle('hidden', undoText === null);
+  }
+  function add(ch){ text += ch; show(); }
+  function back(){ text = text.slice(0, -1); show(); }
+  /* CLEAR keeps the old text so UNDO can bring it back, even after more typing or a reload.
+     UNDO swaps the two, so pressing it by accident can itself be undone. */
+  function clearAll(){ if(!text) return; undoText = text; text = ''; show(); }
+  function undo(){
+    if(undoText === null) return;
+    var previous = text; text = undoText; undoText = previous ? previous : null; show();
+  }
+
+  /* ---------- feedback ---------- */
+  var actx = null;
+  function audio(){
+    if(!actx){ var A = window.AudioContext || window.webkitAudioContext; if(A) actx = new A(); }
+    return actx;
+  }
+  function wakeAudio(){
+    if(!cfg.sound) return;
+    try{ var c = audio(); if(c && c.state !== 'running') c.resume(); }catch(e){}
+  }
+  function tick(){
+    if(!cfg.sound) return;
+    try{
+      var c = audio(); if(!c) return;
+      var o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.15, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      o.connect(g); g.connect(c.destination);
+      o.start(t); o.stop(t + 0.09);
+    }catch(e){}
+  }
+  function flash(el){
+    el.classList.add('fired');
+    setTimeout(function(){ el.classList.remove('fired'); }, 180);
+  }
+  var canSpeak = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+  function say(words){
+    if(!canSpeak) return;
+    try{
+      var u = new SpeechSynthesisUtterance(words);
+      u.lang = 'en-ZA'; u.rate = 0.9;
+      if(speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    }catch(e){}
+  }
+
+  /* ---------- touch engine ----------
+     One place tracks every finger. A key counts when a finger has stayed on it for the hold time
+     (straight away in Instant mode). Sliding off a key cancels it. In hold mode, sliding onto a
+     letter and resting there counts too, like pointing at the plastic stencil. */
+  var press = new WeakMap();     /* element -> {fire, fixed, slide} */
+  var pointers = new Map();      /* pointerId -> {el, timer, done, began} */
+  var lockUntil = 0;             /* pause after each key */
+  var lastFired = null;
+  var lifts = new WeakMap();     /* key -> its most recent finger lift, used to bridge a flicker of contact */
+  var lastPointer = 0;           /* time of the latest finger activity */
+  var FLICKER = 150;             /* ms: a lift and re-touch on the same key this close together is one press */
+  var GAP = {};                  /* finger is between keys on the board */
+
+  function reg(el, fire, opts){
+    opts = opts || {};
+    press.set(el, {fire:fire, fixed:opts.fixed || 0, slide:!!opts.slide});
+    /* Keyboard and assistive-technology activation (no finger position involved) */
+    el.addEventListener('click', function(e){
+      /* A click that follows a finger was already handled by the touch engine */
+      if(e.detail !== 0 || sheetOpen || performance.now() - lastPointer < 700) return;
+      flash(el); tick(); fire();
+    });
+    el.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+  }
+  function keyAt(x, y){
+    var n = document.elementFromPoint(x, y), inGrid = false;
+    while(n && n.nodeType === 1){
+      if(press.has(n)) return n;
+      if(n === grid) inGrid = true;
+      n = n.parentNode;
+    }
+    if(inGrid) return GAP;
+    /* Just outside the outer edge of the board counts as a gap too */
+    var r = grid.getBoundingClientRect(), s = slack();
+    return (x >= r.left - s && x <= r.right + s && y >= r.top - s && y <= r.bottom + s) ? GAP : null;
+  }
+  /* A key is spent while a finger that already counted on it is still resting there */
+  function spent(el, p){
+    var yes = false;
+    pointers.forEach(function(q){ if(q !== p && q.el === el && q.done) yes = true; });
+    return yes;
+  }
+  /* How far a point is outside a key, in px (0 when inside) */
+  function away(el, x, y){
+    var r = el.getBoundingClientRect();
+    var dx = Math.max(r.left - x, 0, x - r.right), dy = Math.max(r.top - y, 0, y - r.bottom);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function slack(){ return (parseFloat(getComputedStyle(grid).columnGap) || 8) + 6; }
+  /* A touch that lands in the thin gap between keys belongs to the nearest key */
+  function nearestKey(x, y){
+    var best = null, bestD = slack();
+    Array.prototype.forEach.call(grid.children, function(el){
+      if(!press.has(el)) return;
+      var d = away(el, x, y);
+      if(d < bestD){ bestD = d; best = el; }
+    });
+    return best;
+  }
+  function disarm(p){
+    if(p.timer){ clearTimeout(p.timer); p.timer = null; }
+    p.began = 0; p.waiting = false;
+    if(!p.el) return;
+    var el = p.el, stillHeld = false;
+    pointers.forEach(function(q){ if(q !== p && q.el === el && q.began) stillHeld = true; });
+    if(!stillHeld) el.classList.remove('holding');
+    el.classList.remove('waiting');
+  }
+  function cancelAll(){
+    pointers.forEach(function(p){ if(p.timer){ clearTimeout(p.timer); p.timer = null; } p.began = 0; });
+    pointers.forEach(function(p){ if(p.el) p.el.classList.remove('holding', 'waiting'); });
+    pointers.clear();
+  }
+  function arm(p, credit){
+    disarm(p);
+    var el = p.el, conf = press.get(el);
+    if(!conf) return;
+    /* The pause applies to the board keys, not to the held adult controls */
+    var wait = conf.fixed ? 0 : lockUntil - performance.now();
+    if(wait > 0){
+      /* Instant mode: a second touch on the same key during the pause is a bounce, drop it */
+      if(cfg.hold <= 0 && el === lastFired){ p.done = true; return; }
+      el.classList.add('waiting'); p.waiting = true;
+      p.timer = setTimeout(function(){ p.timer = null; arm(p, credit); }, wait + 4);
+      return;
+    }
+    var hold = conf.fixed ? Math.max(conf.fixed, cfg.hold) : cfg.hold;
+    if(hold <= 0){ fireKey(p); return; }
+    var left = Math.max(40, hold - (credit || 0));
+    p.began = performance.now() - (hold - left);
+    el.style.setProperty('--hold', left + 'ms');
+    el.classList.add('holding');
+    p.timer = setTimeout(function(){
+      p.timer = null; p.began = 0;
+      el.classList.remove('holding');
+      if(!conf.fixed && performance.now() < lockUntil){ arm(p); return; }   /* another key counted meanwhile */
+      fireKey(p);
+    }, left);
+  }
+  function fireKey(p){
+    var el = p.el, conf = press.get(el);
+    p.done = true; p.began = 0;
+    if(!conf || sheetOpen || !el.isConnected) return;
+    lockUntil = performance.now() + cfg.repeat;
+    lastFired = el;
+    /* Any other finger resting on this same key is part of the same press */
+    pointers.forEach(function(q){ if(q !== p && q.el === el){ disarm(q); q.done = true; } });
+    el.classList.remove('holding', 'waiting');
+    flash(el); tick();
+    conf.fire();
+  }
+
+  function lift(e){
+    wakeAudio();
+    var p = pointers.get(e.pointerId);
+    if(!p) return;
+    var now = performance.now();
+    lastPointer = now;
+    /* Instant mode: a quick touch that was waiting for the pause still counts if the pause is over */
+    if(p.waiting && cfg.hold <= 0 && now >= lockUntil && p.el){ disarm(p); fireKey(p); }
+    if(p.el) lifts.set(p.el, {t:now, done:p.done, progress:(p.began && !p.done) ? now - p.began : 0});
+    disarm(p);
+    pointers.delete(e.pointerId);
+  }
+  document.addEventListener('pointerdown', function(e){
+    wakeAudio(); stayAwake();
+    lastPointer = performance.now();
+    if(sheetOpen) return;
+    if(e.target && e.target.closest && e.target.closest('#btnSpeak')) return;   /* plain tap button */
+    e.preventDefault();
+    if(e.pointerType === 'mouse' && e.button !== 0) return;
+    var old = pointers.get(e.pointerId);
+    if(old) disarm(old);
+    var k = keyAt(e.clientX, e.clientY);
+    if(k === GAP) k = nearestKey(e.clientX, e.clientY);
+    var p = {el:k || null, timer:null, done:false, began:0, waiting:false};
+    pointers.set(e.pointerId, p);
+    if(!p.el) return;
+    if(spent(p.el, p)){ p.done = true; return; }     /* another finger already counted on this key and is still there */
+    /* A shaky finger that loses contact for an instant carries on where it was */
+    var conf = press.get(p.el), now = performance.now(), credit = 0, was = lifts.get(p.el);
+    if(!conf.fixed && was && now - was.t < FLICKER){
+      if(was.done){ p.done = true; return; }
+      if(cfg.hold > 0) credit = was.progress + (now - was.t);
+    }
+    arm(p, credit);
+  });
+  document.addEventListener('pointermove', function(e){
+    var p = pointers.get(e.pointerId);
+    if(!p) return;
+    lastPointer = performance.now();
+    if(e.pointerType === 'mouse' && e.buttons === 0){ lift(e); return; }   /* missed mouse release */
+    var k = keyAt(e.clientX, e.clientY);
+    if(k === p.el) return;
+    var conf = p.el ? press.get(p.el) : null;
+    /* A wobble just over the edge of a letter key is not a slide-off */
+    if(k === GAP && conf && !conf.fixed && away(p.el, e.clientX, e.clientY) <= slack()) return;
+    disarm(p);
+    if(k && k !== GAP){
+      p.el = k; p.done = false;
+      if(spent(k, p)) p.done = true;                              /* joins a press that already counted */
+      else if(press.get(k).slide && cfg.hold > 0) arm(p);         /* slide onto a letter and rest there */
+    } else {
+      p.el = null;
+    }
+  });
+  document.addEventListener('pointerup', lift);
+  document.addEventListener('pointercancel', lift);
+  window.addEventListener('blur', cancelAll);
+  /* Safety net: once no finger is on the glass, no key can be left thinking it is still held */
+  function allUp(e){ if(e.touches && e.touches.length === 0) cancelAll(); }
+  document.addEventListener('touchend', allUp);
+  document.addEventListener('touchcancel', allUp);
+
+  /* Belt and braces against zoom, bounce and scrolling on older iPads */
+  document.addEventListener('touchmove', function(e){ if(!sheetOpen) e.preventDefault(); }, {passive:false});
+  document.addEventListener('gesturestart', function(e){ e.preventDefault(); });
+  document.addEventListener('dblclick', function(e){ e.preventDefault(); });
+
+  /* ---------- the board ---------- */
+  function key(label, fire, cls, id, aria){
+    var b = document.createElement('button');
+    b.type = 'button'; b.textContent = label;
+    if(cls) b.className = cls;
+    if(id) b.id = id;
+    if(aria) b.setAttribute('aria-label', aria);
+    reg(b, fire, {slide:true});
+    return b;
+  }
+  function render(){
+    cancelAll();
+    grid.innerHTML = '';
+    var letters = mode === 'letters';
+    (letters ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' : '0123456789').split('').forEach(function(ch){
+      grid.appendChild(key(ch, function(){ add(ch); }, letters ? '' : 'tall'));
+    });
+    /* SPACE and BACK sit in the same place on both boards */
+    grid.appendChild(key('SPACE', function(){ add(' '); }, 'wide', 'keySpace'));
+    grid.appendChild(key('⌫ BACK', back, 'wide', 'keyBack', 'Back. Delete the last character.'));
+    $('btnMode').textContent = letters ? '123' : 'ABC';
+    $('btnMode').setAttribute('aria-label', letters ? 'Switch to numbers' : 'Switch to letters');
+  }
+
+  reg($('btnMode'), function(){ mode = mode === 'letters' ? 'numbers' : 'letters'; render(); });
+  reg($('btnUndo'), undo, {fixed:1000});
+  reg($('btnClear'), clearAll, {fixed:1000});
+  reg($('btnSettings'), openSheet, {fixed:1000});
+  /* SPEAK is a plain tap so that the iPad always allows the speech */
+  $('btnSpeak').addEventListener('click', function(){ if(!sheetOpen && text.trim()) say(text.toLowerCase()); });
+
+  /* A real keyboard also works, handy for testing on a laptop */
+  document.addEventListener('keydown', function(e){
+    if(sheetOpen){ if(e.key === 'Escape') closeSheet(); return; }
+    if(e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    var onButton = document.activeElement && document.activeElement.tagName === 'BUTTON';
+    if(/^[a-zA-Z0-9]$/.test(e.key)) add(e.key.toUpperCase());
+    else if(e.key === ' ' && !onButton){ e.preventDefault(); add(' '); }
+    else if(e.key === 'Backspace'){ e.preventDefault(); back(); }
+  });
+
+  /* ---------- setup sheet ---------- */
+  function apply(){
+    document.body.classList.remove('light','yellow');
+    if(cfg.theme !== 'dark') document.body.classList.add(cfg.theme);
+    $('btnSpeak').classList.toggle('hidden', !cfg.speak || !canSpeak);
+    save('lb.cfg', cfg);
+  }
+  function para(cls, words){
+    var p = document.createElement('p'); p.className = cls; p.textContent = words; return p;
+  }
+  function buildNotes(){
+    var notes = $('notes'); notes.innerHTML = '';
+    if(!storageOK) notes.appendChild(para('note',
+      'This browser is not saving the text or these settings, so both reset when the page is closed or reloaded.'));
+    if(awake === 'no') notes.appendChild(para('note',
+      'The page cannot keep the screen awake here. Set Auto-Lock to Never in the iPad Display settings, or use Guided Access.'));
+    if(cfg.speak && !canSpeak) notes.appendChild(para('note',
+      'This browser cannot read text aloud, so the SPEAK button stays hidden.'));
+  }
+  function buildSheet(){
+    buildNotes();
+    var list = $('optList'); list.innerHTML = '';
+    OPTIONS.forEach(function(o){
+      var h = document.createElement('h2'); h.textContent = o.label; list.appendChild(h);
+      if(o.help) list.appendChild(para('help', o.help));
+      var row = document.createElement('div'); row.className = 'opts';
+      o.opts.forEach(function(pair){
+        var b = document.createElement('button');
+        b.type = 'button'; b.textContent = pair[1];
+        b.setAttribute('aria-pressed', cfg[o.key] === pair[0] ? 'true' : 'false');
+        b.addEventListener('click', function(){
+          cfg[o.key] = pair[0];
+          /* Switching sound or speech on inside a tap is what lets the iPad play it later */
+          if(o.key === 'sound' && pair[0]){ wakeAudio(); tick(); }
+          if(o.key === 'speak' && pair[0]) say('Speak is on');
+          apply();
+          Array.prototype.forEach.call(row.children, function(c){ c.setAttribute('aria-pressed', c === b ? 'true' : 'false'); });
+          buildNotes();
+        });
+        row.appendChild(b);
+      });
+      list.appendChild(row);
+    });
+  }
+  function openSheet(){
+    cancelAll();
+    sheetOpen = true;
+    setInert(true);
+    buildSheet();
+    sheet.classList.remove('hidden');
+    sheet.scrollTop = 0;
+    try{ $('sheetTitle').focus(); }catch(e){}
+  }
+  function setInert(on){
+    ['bar','out','grid'].forEach(function(id){
+      if(on){ $(id).setAttribute('inert',''); $(id).setAttribute('aria-hidden','true'); }
+      else { $(id).removeAttribute('inert'); $(id).removeAttribute('aria-hidden'); }
+    });
+  }
+  function closeSheet(){
+    sheetOpen = false;
+    setInert(false);
+    sheet.classList.add('hidden');
+    if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    fit();
+  }
+  $('done').addEventListener('click', closeSheet);
+
+  /* ---------- keep the screen awake while the board is open ---------- */
+  var lock = null, lockPending = false;
+  var awake = 'wakeLock' in navigator ? 'unknown' : 'no';
+  function stayAwake(){
+    if(lock || lockPending || awake === 'no' || document.visibilityState !== 'visible') return;
+    lockPending = true;
+    try{
+      navigator.wakeLock.request('screen').then(function(l){
+        lockPending = false; lock = l; awake = 'yes';
+        l.addEventListener('release', function(){ lock = null; });
+      }).catch(function(){ lockPending = false; awake = 'no'; });
+    }catch(e){ lockPending = false; awake = 'no'; }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') stayAwake(); else cancelAll();
+  });
+  window.addEventListener('resize', fit);
+
+  apply(); render(); show(); stayAwake();
+})();
+</script>
+</body>
+</html>
